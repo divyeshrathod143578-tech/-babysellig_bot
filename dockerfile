@@ -33,8 +33,8 @@ WORKDIR /var/www/html
 # Copy application files
 COPY . /var/www/html/
 
-# Copy Apache config if exists
-COPY .apache-config.conf /etc/apache2/sites-available/000-default.conf 2>/dev/null || true
+# Copy Apache config if exists (using RUN with shell)
+RUN if [ -f .apache-config.conf ]; then cp .apache-config.conf /etc/apache2/sites-available/000-default.conf; fi
 
 # Install PHP dependencies if composer.json exists
 RUN if [ -f "composer.json" ]; then composer install --no-interaction --optimize-autoloader --no-dev; fi
