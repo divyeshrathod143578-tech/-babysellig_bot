@@ -11,7 +11,7 @@ RUN apt-get update && apt-get install -y \
     unzip \
     && rm -rf /var/lib/apt/lists/*
 
-# PHP extensions install
+# PHP extensions install (mysql हटा दिया गया है - अब सही)
 RUN docker-php-ext-install \
     pdo_mysql \
     mysqli \
@@ -33,7 +33,7 @@ WORKDIR /var/www/html
 # Copy application files
 COPY . /var/www/html/
 
-# Copy Apache config if exists (using RUN with shell)
+# Copy Apache config if exists
 RUN if [ -f .apache-config.conf ]; then cp .apache-config.conf /etc/apache2/sites-available/000-default.conf; fi
 
 # Install PHP dependencies if composer.json exists
