@@ -1,0 +1,22 @@
+# Enable rewrite engine
+RewriteEngine On
+
+# Security: Block access to sensitive files
+<FilesMatch "^(users\.json|error\.log|composer\.json|composer\.lock|\.env|Dockerfile|docker-compose\.yml|apache-config\.conf)$">
+    Order allow,deny
+    Deny from all
+</FilesMatch>
+
+# Block hidden files and directories
+<FilesMatch "^\.">
+    Order allow,deny
+    Deny from all
+</FilesMatch>
+
+# Redirect all requests to index.php
+RewriteCond %{REQUEST_FILENAME} !-f
+RewriteCond %{REQUEST_FILENAME} !-d
+RewriteRule ^(.*)$ index.php [QSA,L]
+
+# Security: Disable directory listing
+Options -Indexes

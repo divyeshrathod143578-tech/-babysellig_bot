@@ -1,0 +1,177 @@
+<?php
+// Load Composer autoloader
+require_once __DIR__ . '/vendor/autoload.php';
+
+use TelegramBot\Api\BotApi;
+use TelegramBot\Api\Types\Update;
+use TelegramBot\Api\Types\Inline\InlineKeyboardMarkup;
+use TelegramBot\Api\Types\Inline\InlineKeyboardButton;
+
+// Enable error reporting for debugging
+error_reporting(E_ALL);
+ini_set('display_errors', 0);
+ini_set('log_errors', 1);
+ini_set('error_log', __DIR__ . '/error.log');
+
+// Get bot token from environment
+$token = getenv('TELEGRAM_BOT_TOKEN');
+if (!$token) {
+    http_response_code(500);
+    die('Bot token not configured');
+}
+
+$bot = new BotApi($token);
+$webhookUrl = getenv('WEBHOOK_URL');
+
+// Handle webhook setup
+if (isset($_GET['setwebhook'])) {
+    try {
+        $result = $bot->setWebhook($webhookUrl);
+        echo json_encode(['success' => true, 'result' => $result]);
+        exit;
+    } catch (Exception $e) {
+        http_response_code(500);
+        echo json_encode(['success' => false, 'error' => $e->getMessage()]);
+        exit;
+    }
+}
+
+// Handle incoming webhook
+$content = file_get_contents('php://input');
+if (empty($content)) {
+    http_response_code(200);
+    echo 'OK';
+    exit;
+}
+
+// Process the update
+try {
+    $update = Update::fromResponse($content);
+    handleUpdate($bot, $update);
+    http_response_code(200);
+    echo 'OK';
+} catch (Exception $e) {
+    error_log("Error processing update: " . $e->getMessage());
+    http_response_code(500);
+    echo 'Error';
+}
+
+function handleUpdate($bot, $update) {
+    $userId = $update->getMessage()?->getFrom()?->getId() ?? 
+              $update->getCallbackQuery()?->getFrom()?->getId();
+    
+    if (!$userId) {
+        return;
+    }
+
+    // Load users data
+    $users = loadUsers();
+    
+    // Check if user exists
+    if (!isset($users[$userId])) {
+        $users[$userId] = [
+            'id' => $userId,
+            'first_name' => $update->getMessage()?->getFrom()?->getFirstName() ?? 'Unknown',
+            'last_name' => $update->getMessage()?->getFrom()?->getLastName() ?? '',
+            'username' => $update->getMessage()?->getFrom()?->getUsername() ?? '',
+            'registered_at' => date('Y-m-d H:i:s'),
+            'status' => 'active'
+        ];
+        saveUsers($users);
+    }
+
+    // Handle commands
+    if ($update->getMessage()) {
+        $text = $update->getMessage()->getText();
+        $chatId = $update->getMessage()->getChat()->getId();
+        
+        if ($text === '/start') {
+            $keyboard = new InlineKeyboardMarkup([
+                [
+                    new InlineKeyboardButton('📊 Profile', 'profile'),
+                    new InlineKeyboardButton('ℹ️ Help', 'help')
+                ],
+                [
+                    new InlineKeyboardButton('🔔 Status', 'status')
+                ]
+            ]);
+            
+            $bot->sendMessage(
+                $chatId,
+                "Welcome to the Telegram Bot! 👋\n\nChoose an option below:",
+                null,
+                null,
+                $keyboard
+            );
+        }
+    }
+
+    // Handle callback queries
+    if ($update->getCallbackQuery()) {
+        $callbackData = $update->getCallbackQuery()->getData();
+        $chatId = $update->getCallbackQuery()->getMessage()->getChat()->getId();
+        $messageId = $update->getCallbackQuery()->getMessage()->getMessageId();
+        
+        switch ($callbackData) {
+            case 'profile':
+                $user = loadUsers()[$userId] ?? [];
+                $profileText = "👤 *Your Profile*\n\n";
+                $profileText .= "ID: `{$userId}`\n";
+                $profileText .= "Name: {$user['first_name']} {$user['last_name']}\n";
+                $profileText .= "Username: @{$user['username']}\n";
+                $profileText .= "Registered: {$user['registered_at']}\n";
+                $profileText .= "Status: {$user['status']}";
+                
+                $bot->editMessageText(
+                    $chatId,
+                    $messageId,
+                    $profileText,
+                    'Markdown'
+                );
+                break;
+                
+            case 'help':
+                $helpText = "ℹ️ *Help*\n\n";
+                $helpText .= "Available commands:\n";
+                $helpText .= "/start - Show main menu\n";
+                $helpText .= "/help - Show this help\n\n";
+                $helpText .= "Use the buttons below to navigate.";
+                
+                $bot->editMessageText(
+                    $chatId,
+                    $messageId,
+                    $helpText,
+                    'Markdown'
+                );
+                break;
+                
+            case 'status':
+                $statusText = "✅ *Bot Status*\n\n";
+                $statusText .= "• Online and running\n";
+                $statusText .= "• Total users: " . count(loadUsers()) . "\n";
+                $statusText .= "• Server time: " . date('Y-m-d H:i:s');
+                
+                $bot->editMessageText(
+                    $chatId,
+                    $messageId,
+                    $statusText,
+                    'Markdown'
+                );
+                break;
+        }
+    }
+}
+
+function loadUsers() {
+    $file = __DIR__ . '/users.json';
+    if (!file_exists($file)) {
+        return [];
+    }
+    $content = file_get_contents($file);
+    return json_decode($content, true) ?: [];
+}
+
+function saveUsers($users) {
+    $file = __DIR__ . '/users.json';
+    file_put_contents($file, json_encode($users, JSON_PRETTY_PRINT));
+}

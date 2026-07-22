@@ -1,0 +1,807 @@
+php
+
+  Telegram Bot Webhook Handler
+  Hosted on Render.com with Docker
+ 
+
+ Load Composer autoloader
+require_once __DIR__ . 'vendorautoload.php';
+
+use TelegramBotApiBotApi;
+use TelegramBotApiTypesUpdate;
+use TelegramBotApiTypesInlineInlineKeyboardMarkup;
+use TelegramBotApiTypesInlineInlineKeyboardButton;
+
+ Enable error reporting for debugging
+error_reporting(E_ALL);
+ini_set('display_errors', 0);
+ini_set('log_errors', 1);
+ini_set('error_log', __DIR__ . 'error.log');
+
+ Get bot token from environment
+$token = getenv('TELEGRAM_BOT_TOKEN');
+if (!$token) {
+    http_response_code(500);
+    die(json_encode(['error' = 'Bot token not configured']));
+}
+
+ Initialize bot
+$bot = new BotApi($token);
+$webhookUrl = getenv('WEBHOOK_URL');
+
+ Handle webhook setup
+if (isset($_GET['setwebhook'])) {
+    try {
+         Remove existing webhook first
+        $bot-deleteWebhook();
+        
+         Set new webhook
+        $result = $bot-setWebhook($webhookUrl);
+        
+         Get webhook info
+        $webhookInfo = $bot-getWebhookInfo();
+        
+        echo json_encode([
+            'success' = true,
+            'message' = 'Webhook set successfully',
+            'webhook_url' = $webhookUrl,
+            'webhook_info' = $webhookInfo,
+            'timestamp' = date('Y-m-d His')
+        ], JSON_PRETTY_PRINT);
+        exit;
+    } catch (Exception $e) {
+        http_response_code(500);
+        echo json_encode([
+            'success' = false,
+            'error' = $e-getMessage(),
+            'timestamp' = date('Y-m-d His')
+        ], JSON_PRETTY_PRINT);
+        exit;
+    }
+}
+
+ Handle webhook info
+if (isset($_GET['webhookinfo'])) {
+    try {
+        $webhookInfo = $bot-getWebhookInfo();
+        echo json_encode([
+            'success' = true,
+            'webhook_info' = $webhookInfo,
+            'timestamp' = date('Y-m-d His')
+        ], JSON_PRETTY_PRINT);
+        exit;
+    } catch (Exception $e) {
+        http_response_code(500);
+        echo json_encode([
+            'success' = false,
+            'error' = $e-getMessage()
+        ]);
+        exit;
+    }
+}
+
+ Handle delete webhook
+if (isset($_GET['deletewebhook'])) {
+    try {
+        $result = $bot-deleteWebhook();
+        echo json_encode([
+            'success' = true,
+            'message' = 'Webhook deleted successfully',
+            'timestamp' = date('Y-m-d His')
+        ], JSON_PRETTY_PRINT);
+        exit;
+    } catch (Exception $e) {
+        http_response_code(500);
+        echo json_encode([
+            'success' = false,
+            'error' = $e-getMessage()
+        ]);
+        exit;
+    }
+}
+
+ Health check endpoint
+if (isset($_GET['health'])) {
+    $users = loadUsers();
+    echo json_encode([
+        'status' = 'OK',
+        'service' = 'Telegram Bot',
+        'version' = '1.0.0',
+        'timestamp' = date('Y-m-d His'),
+        'total_users' = count($users),
+        'php_version' = phpversion(),
+        'memory_usage' = memory_get_usage(true),
+        'disk_free' = disk_free_space(__DIR__),
+        'webhook_url' = $webhookUrl
+    ], JSON_PRETTY_PRINT);
+    exit;
+}
+
+ Handle incoming webhook
+$content = file_get_contents('phpinput');
+if (empty($content)) {
+    http_response_code(200);
+    echo 'OK';
+    exit;
+}
+
+ Log incoming webhook for debugging
+error_log(Webhook received at  . date('Y-m-d His'));
+
+ Process the update
+try {
+    $update = UpdatefromResponse($content);
+    handleUpdate($bot, $update);
+    http_response_code(200);
+    echo 'OK';
+} catch (Exception $e) {
+    error_log(Error processing update  . $e-getMessage() . n . $e-getTraceAsString());
+    http_response_code(500);
+    echo 'Error';
+}
+
+
+  Main update handler function
+ 
+function handleUpdate($bot, $update) {
+     Get user ID from message or callback query
+    $userId = null;
+    $chatId = null;
+    $messageId = null;
+    $userData = [];
+    
+     Handle message updates
+    if ($update-getMessage()) {
+        $message = $update-getMessage();
+        $userId = $message-getFrom()-getId();
+        $chatId = $message-getChat()-getId();
+        $userData = [
+            'id' = $userId,
+            'first_name' = $message-getFrom()-getFirstName()  'Unknown',
+            'last_name' = $message-getFrom()-getLastName()  '',
+            'username' = $message-getFrom()-getUsername()  '',
+            'language_code' = $message-getFrom()-getLanguageCode()  'en'
+        ];
+        
+         Handle text commands
+        $text = $message-getText();
+        if ($text) {
+            handleCommand($bot, $chatId, $text, $userId, $userData);
+        }
+    }
+    
+     Handle callback queries
+    if ($update-getCallbackQuery()) {
+        $callbackQuery = $update-getCallbackQuery();
+        $userId = $callbackQuery-getFrom()-getId();
+        $chatId = $callbackQuery-getMessage()-getChat()-getId();
+        $messageId = $callbackQuery-getMessage()-getMessageId();
+        $callbackData = $callbackQuery-getData();
+        
+        handleCallback($bot, $chatId, $messageId, $callbackData, $userId);
+    }
+    
+     Registerupdate user in database
+    if ($userId && !empty($userData)) {
+        registerUser($userId, $userData);
+    }
+}
+
+
+  Handle text commands
+ 
+function handleCommand($bot, $chatId, $text, $userId, $userData) {
+     Register user first
+    registerUser($userId, $userData);
+    
+     Handle start command
+    if ($text === 'start') {
+        $keyboard = new InlineKeyboardMarkup([
+            [
+                new InlineKeyboardButton('📊 My Profile', 'profile'),
+                new InlineKeyboardButton('ℹ️ Help', 'help')
+            ],
+            [
+                new InlineKeyboardButton('📈 Statistics', 'stats'),
+                new InlineKeyboardButton('🔔 Status', 'status')
+            ],
+            [
+                new InlineKeyboardButton('📝 About', 'about')
+            ]
+        ]);
+        
+        $welcomeMessage = 🤖 Welcome to the Telegram Bot!nn;
+        $welcomeMessage .= Hello {$userData['first_name']}! 👋n;
+        $welcomeMessage .= I'm here to help you. Choose an option belownn;
+        $welcomeMessage .= 📊 Profile - View your informationn;
+        $welcomeMessage .= ℹ️ Help - Get assistancen;
+        $welcomeMessage .= 📈 Statistics - Bot statisticsn;
+        $welcomeMessage .= 🔔 Status - Check bot statusn;
+        $welcomeMessage .= 📝 About - Learn about this bot;
+        
+        try {
+            $bot-sendMessage(
+                $chatId,
+                $welcomeMessage,
+                'Markdown',
+                false,
+                null,
+                $keyboard
+            );
+        } catch (Exception $e) {
+            error_log(Error sending start message  . $e-getMessage());
+        }
+        return;
+    }
+    
+     Handle help command
+    if ($text === 'help') {
+        $helpMessage = ℹ️ Help Centernn;
+        $helpMessage .= Available commandsn;
+        $helpMessage .= • start - Show main menun;
+        $helpMessage .= • help - Show this help messagen;
+        $helpMessage .= • profile - View your profilen;
+        $helpMessage .= • stats - View bot statisticsn;
+        $helpMessage .= • status - Check bot statusnn;
+        $helpMessage .= You can also use the inline buttons below the messages to navigate.nn;
+        $helpMessage .= For support, contact @YourSupportHandle;
+        
+        try {
+            $bot-sendMessage($chatId, $helpMessage, 'Markdown');
+        } catch (Exception $e) {
+            error_log(Error sending help message  . $e-getMessage());
+        }
+        return;
+    }
+    
+     Handle profile command
+    if ($text === 'profile') {
+        sendProfile($bot, $chatId, $userId);
+        return;
+    }
+    
+     Handle stats command
+    if ($text === 'stats') {
+        sendStatistics($bot, $chatId);
+        return;
+    }
+    
+     Handle status command
+    if ($text === 'status') {
+        sendStatus($bot, $chatId);
+        return;
+    }
+    
+     Handle about command
+    if ($text === 'about') {
+        sendAbout($bot, $chatId);
+        return;
+    }
+    
+     Handle unknown commands
+    try {
+        $bot-sendMessage(
+            $chatId,
+            ❌ Unknown command. Type help for available commands.
+        );
+    } catch (Exception $e) {
+        error_log(Error sending unknown command message  . $e-getMessage());
+    }
+}
+
+
+  Handle callback queries
+ 
+function handleCallback($bot, $chatId, $messageId, $callbackData, $userId) {
+    switch ($callbackData) {
+        case 'profile'
+            sendProfile($bot, $chatId, $messageId);
+            break;
+            
+        case 'help'
+            $helpText = ℹ️ Help Centernn;
+            $helpText .= 🤔 What can I don;
+            $helpText .= • View your profile informationn;
+            $helpText .= • Check bot statisticsn;
+            $helpText .= • Get bot status updatesnn;
+            $helpText .= 📋 Commandsn;
+            $helpText .= `start` - Main menun;
+            $helpText .= `help` - This helpn;
+            $helpText .= `profile` - Your profilen;
+            $helpText .= `stats` - Bot statisticsn;
+            $helpText .= `status` - Bot statusnn;
+            $helpText .= 💡 Tipsn;
+            $helpText .= • Use inline buttons for quick actionsn;
+            $helpText .= • Your data is stored securelyn;
+            $helpText .= • The bot is available 247;
+            
+            try {
+                $bot-editMessageText(
+                    $chatId,
+                    $messageId,
+                    $helpText,
+                    'Markdown',
+                    false,
+                    new InlineKeyboardMarkup([
+                        [new InlineKeyboardButton('🔙 Back to Menu', 'menu')]
+                    ])
+                );
+            } catch (Exception $e) {
+                error_log(Error editing help message  . $e-getMessage());
+            }
+            break;
+            
+        case 'stats'
+            sendStatistics($bot, $chatId, $messageId);
+            break;
+            
+        case 'status'
+            sendStatus($bot, $chatId, $messageId);
+            break;
+            
+        case 'about'
+            sendAbout($bot, $chatId, $messageId);
+            break;
+            
+        case 'menu'
+            $keyboard = new InlineKeyboardMarkup([
+                [
+                    new InlineKeyboardButton('📊 My Profile', 'profile'),
+                    new InlineKeyboardButton('ℹ️ Help', 'help')
+                ],
+                [
+                    new InlineKeyboardButton('📈 Statistics', 'stats'),
+                    new InlineKeyboardButton('🔔 Status', 'status')
+                ],
+                [
+                    new InlineKeyboardButton('📝 About', 'about')
+                ]
+            ]);
+            
+            try {
+                $bot-editMessageText(
+                    $chatId,
+                    $messageId,
+                    🤖 Main MenunnChoose an option below,
+                    'Markdown',
+                    false,
+                    $keyboard
+                );
+            } catch (Exception $e) {
+                error_log(Error editing menu message  . $e-getMessage());
+            }
+            break;
+            
+        default
+            try {
+                $bot-answerCallbackQuery(
+                    $callbackData,
+                    ❌ Unknown option selected
+                );
+            } catch (Exception $e) {
+                error_log(Error answering callback  . $e-getMessage());
+            }
+    }
+}
+
+
+  Send user profile
+ 
+function sendProfile($bot, $chatId, $messageId = null) {
+    $users = loadUsers();
+    $user = null;
+    
+     Find user by ID (we need to search since keys might be string)
+    foreach ($users as $id = $data) {
+        if ($id == $chatId) {
+            $user = $data;
+            break;
+        }
+    }
+    
+    if (!$user) {
+        $profileText = ❌ Profile Not Foundnn;
+        $profileText .= Please use start to register.;
+        
+        if ($messageId) {
+            try {
+                $bot-editMessageText($chatId, $messageId, $profileText, 'Markdown');
+            } catch (Exception $e) {
+                $bot-sendMessage($chatId, $profileText, 'Markdown');
+            }
+        } else {
+            $bot-sendMessage($chatId, $profileText, 'Markdown');
+        }
+        return;
+    }
+    
+    $profileText = 👤 Your Profilenn;
+    $profileText .= 🆔 ID `{$user['id']}`n;
+    $profileText .= 👤 Name {$user['first_name']} {$user['last_name']}n;
+    $profileText .= 🔖 Username @ . ($user['username']  'Not set') . n;
+    $profileText .= 🌐 Language  . ($user['language_code']  'en') . n;
+    $profileText .= 📅 Registered {$user['registered_at']}n;
+    $profileText .= 📊 Status  . ucfirst($user['status']  'active') . n;
+    $profileText .= 📈 Total commands used  . ($user['commands_used']  0);
+    
+    $keyboard = new InlineKeyboardMarkup([
+        [new InlineKeyboardButton('🔙 Back to Menu', 'menu')]
+    ]);
+    
+    try {
+        if ($messageId) {
+            $bot-editMessageText(
+                $chatId,
+                $messageId,
+                $profileText,
+                'Markdown',
+                false,
+                $keyboard
+            );
+        } else {
+            $bot-sendMessage(
+                $chatId,
+                $profileText,
+                'Markdown',
+                false,
+                null,
+                $keyboard
+            );
+        }
+    } catch (Exception $e) {
+        error_log(Error sending profile  . $e-getMessage());
+    }
+}
+
+
+  Send bot statistics
+ 
+function sendStatistics($bot, $chatId, $messageId = null) {
+    $users = loadUsers();
+    $totalUsers = count($users);
+    $activeUsers = 0;
+    $totalCommands = 0;
+    
+     Calculate statistics
+    foreach ($users as $user) {
+        if (isset($user['status']) && $user['status'] === 'active') {
+            $activeUsers++;
+        }
+        if (isset($user['commands_used'])) {
+            $totalCommands += $user['commands_used'];
+        }
+    }
+    
+    $statsText = 📈 Bot Statisticsnn;
+    $statsText .= 👥 Total Users $totalUsersn;
+    $statsText .= ✅ Active Users $activeUsersn;
+    $statsText .= ⚡ Commands Used $totalCommandsn;
+    $statsText .= 📅 Uptime  . getUptime() . n;
+    $statsText .= 🕐 Server Time  . date('Y-m-d His') . n;
+    $statsText .= 💾 Memory Usage  . formatBytes(memory_get_usage(true)) . n;
+    $statsText .= 📀 Disk Free  . formatBytes(disk_free_space(__DIR__));
+    
+    $keyboard = new InlineKeyboardMarkup([
+        [new InlineKeyboardButton('🔄 Refresh', 'stats')],
+        [new InlineKeyboardButton('🔙 Back to Menu', 'menu')]
+    ]);
+    
+    try {
+        if ($messageId) {
+            $bot-editMessageText(
+                $chatId,
+                $messageId,
+                $statsText,
+                'Markdown',
+                false,
+                $keyboard
+            );
+        } else {
+            $bot-sendMessage(
+                $chatId,
+                $statsText,
+                'Markdown',
+                false,
+                null,
+                $keyboard
+            );
+        }
+    } catch (Exception $e) {
+        error_log(Error sending statistics  . $e-getMessage());
+    }
+}
+
+
+  Send bot status
+ 
+function sendStatus($bot, $chatId, $messageId = null) {
+    $statusText = ✅ Bot Statusnn;
+    $statusText .= 🟢 Status Onlinen;
+    $statusText .= 🔄 Webhook  . (getenv('WEBHOOK_URL')  'Not configured') . n;
+    $statusText .= 📊 Total Users  . count(loadUsers()) . n;
+    $statusText .= 🕐 Server Time  . date('Y-m-d His') . n;
+    $statusText .= ⏱️ Uptime  . getUptime() . n;
+    $statusText .= 🔋 PHP Version  . phpversion() . n;
+    $statusText .= 📦 Framework Telegram Bot APInn;
+    $statusText .= ✅ All systems operational!;
+    
+    $keyboard = new InlineKeyboardMarkup([
+        [new InlineKeyboardButton('🔄 Refresh', 'status')],
+        [new InlineKeyboardButton('🔙 Back to Menu', 'menu')]
+    ]);
+    
+    try {
+        if ($messageId) {
+            $bot-editMessageText(
+                $chatId,
+                $messageId,
+                $statusText,
+                'Markdown',
+                false,
+                $keyboard
+            );
+        } else {
+            $bot-sendMessage(
+                $chatId,
+                $statusText,
+                'Markdown',
+                false,
+                null,
+                $keyboard
+            );
+        }
+    } catch (Exception $e) {
+        error_log(Error sending status  . $e-getMessage());
+    }
+}
+
+
+  Send about information
+ 
+function sendAbout($bot, $chatId, $messageId = null) {
+    $aboutText = 📝 About This Botnn;
+    $aboutText .= 🤖 Telegram Botn;
+    $aboutText .= Version 1.0.0nn;
+    $aboutText .= ✨ Featuresn;
+    $aboutText .= • User registration and profilesn;
+    $aboutText .= • Interactive inline keyboardn;
+    $aboutText .= • Statistics trackingn;
+    $aboutText .= • 247 availabilitynn;
+    $aboutText .= 🛠️ Technologiesn;
+    $aboutText .= • PHP 8.2n;
+    $aboutText .= • Telegram Bot APIn;
+    $aboutText .= • Dockern;
+    $aboutText .= • Render.comnn;
+    $aboutText .= 📧 Supportn;
+    $aboutText .= Contact @YourSupportHandlen;
+    $aboutText .= GitHub github.comyourusernameyour-repo;
+    
+    $keyboard = new InlineKeyboardMarkup([
+        [new InlineKeyboardButton('🔙 Back to Menu', 'menu')]
+    ]);
+    
+    try {
+        if ($messageId) {
+            $bot-editMessageText(
+                $chatId,
+                $messageId,
+                $aboutText,
+                'Markdown',
+                false,
+                $keyboard
+            );
+        } else {
+            $bot-sendMessage(
+                $chatId,
+                $aboutText,
+                'Markdown',
+                false,
+                null,
+                $keyboard
+            );
+        }
+    } catch (Exception $e) {
+        error_log(Error sending about  . $e-getMessage());
+    }
+}
+
+
+  Register or update user in the JSON database
+ 
+function registerUser($userId, $userData) {
+    $users = loadUsers();
+    $userId = (string) $userId;
+    
+    if (!isset($users[$userId])) {
+         New user
+        $users[$userId] = [
+            'id' = $userId,
+            'first_name' = $userData['first_name']  'Unknown',
+            'last_name' = $userData['last_name']  '',
+            'username' = $userData['username']  '',
+            'language_code' = $userData['language_code']  'en',
+            'registered_at' = date('Y-m-d His'),
+            'last_active' = date('Y-m-d His'),
+            'status' = 'active',
+            'commands_used' = 0
+        ];
+    } else {
+         Update existing user
+        $users[$userId]['first_name'] = $userData['first_name']  $users[$userId]['first_name'];
+        $users[$userId]['last_name'] = $userData['last_name']  $users[$userId]['last_name'];
+        $users[$userId]['username'] = $userData['username']  $users[$userId]['username'];
+        $users[$userId]['language_code'] = $userData['language_code']  $users[$userId]['language_code'];
+        $users[$userId]['last_active'] = date('Y-m-d His');
+        $users[$userId]['commands_used'] = ($users[$userId]['commands_used']  0) + 1;
+    }
+    
+    saveUsers($users);
+    return $users[$userId];
+}
+
+
+  Load users from JSON file
+ 
+function loadUsers() {
+    $file = __DIR__ . 'users.json';
+    
+     If file doesn't exist, create it with empty array
+    if (!file_exists($file)) {
+        saveUsers([]);
+        return [];
+    }
+    
+     Read file
+    $content = file_get_contents($file);
+    if ($content === false) {
+        error_log(Failed to read users.json);
+        return [];
+    }
+    
+    $users = json_decode($content, true);
+    if ($users === null && json_last_error() !== JSON_ERROR_NONE) {
+        error_log(JSON decode error  . json_last_error_msg());
+        return [];
+    }
+    
+    return $users  [];
+}
+
+
+  Save users to JSON file
+ 
+function saveUsers($users) {
+    $file = __DIR__ . 'users.json';
+    
+     Ensure directory exists and is writable
+    $dir = dirname($file);
+    if (!is_dir($dir)) {
+        mkdir($dir, 0755, true);
+    }
+    
+     Write to file with proper permissions
+    $json = json_encode($users, JSON_PRETTY_PRINT  JSON_UNESCAPED_UNICODE);
+    if ($json === false) {
+        error_log(Failed to encode users to JSON);
+        return false;
+    }
+    
+    $result = file_put_contents($file, $json, LOCK_EX);
+    if ($result === false) {
+        error_log(Failed to write users.json);
+        return false;
+    }
+    
+     Set file permissions
+    chmod($file, 0666);
+    
+    return true;
+}
+
+
+  Get server uptime
+ 
+function getUptime() {
+    if (function_exists('exec')) {
+        $uptime = @exec('uptime -p');
+        if ($uptime) {
+            return str_replace('up ', '', $uptime);
+        }
+    }
+    return 'Unknown';
+}
+
+
+  Format bytes to human readable format
+ 
+function formatBytes($bytes, $precision = 2) {
+    $units = ['B', 'KB', 'MB', 'GB', 'TB'];
+    $bytes = max($bytes, 0);
+    $pow = floor(($bytes  log($bytes)  0)  log(1024));
+    $pow = min($pow, count($units) - 1);
+    $bytes = pow(1024, $pow);
+    return round($bytes, $precision) . ' ' . $units[$pow];
+}
+
+ If this is not a webhook request, show a simple status page
+if (!isset($_GET['setwebhook']) && !isset($_GET['webhookinfo']) && 
+    !isset($_GET['deletewebhook']) && !isset($_GET['health'])) {
+    
+    !DOCTYPE html
+    html
+    head
+        titleTelegram Bottitle
+        style
+            body {
+                font-family Arial, sans-serif;
+                max-width 800px;
+                margin 50px auto;
+                padding 20px;
+                background #f5f5f5;
+            }
+            .container {
+                background white;
+                padding 30px;
+                border-radius 10px;
+                box-shadow 0 2px 10px rgba(0,0,0,0.1);
+            }
+            h1 {
+                color #2c3e50;
+            }
+            .status {
+                display inline-block;
+                padding 5px 15px;
+                background #27ae60;
+                color white;
+                border-radius 20px;
+                font-size 14px;
+            }
+            .info {
+                margin 20px 0;
+                padding 15px;
+                background #ecf0f1;
+                border-radius 5px;
+            }
+            .endpoint {
+                background #34495e;
+                color #ecf0f1;
+                padding 10px;
+                border-radius 5px;
+                font-family monospace;
+                margin 5px 0;
+            }
+            .footer {
+                margin-top 30px;
+                color #7f8c8d;
+                font-size 12px;
+            }
+        style
+    head
+    body
+        div class=container
+            h1🤖 Telegram Both1
+            pspan class=status✅ Onlinespanp
+            
+            div class=info
+                h3📋 Endpointsh3
+                div class=endpointsetwebhook=1 - Set webhookdiv
+                div class=endpointwebhookinfo=1 - Get webhook infodiv
+                div class=endpointdeletewebhook=1 - Delete webhookdiv
+                div class=endpointhealth=1 - Health checkdiv
+            div
+            
+            div class=info
+                h3📊 Quick Statsh3
+                pTotal Users php echo count(loadUsers()); p
+                pPHP Version php echo phpversion(); p
+                pMemory Usage php echo formatBytes(memory_get_usage(true)); p
+            div
+            
+            div class=footer
+                pPowered by PHP php echo phpversion();   Telegram Bot APIp
+            div
+        div
+    body
+    html
+    php
+}
